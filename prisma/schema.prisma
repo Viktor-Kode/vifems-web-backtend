@@ -1,0 +1,278 @@
+// ============================================================
+// VifeMS — Prisma Schema
+// Database: PostgreSQL
+// ORM: Prisma
+//
+// This file defines the database schema for the VifeMS
+// backend. Run `npx prisma migrate dev` to apply changes.
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------------
+// User
+//
+// Core identity model. Stores authenticated user accounts.
+// Passwords are NEVER stored in plain text — only bcrypt hashes.
+// ------------------------------------------------------------
+model User {
+  id               String               @id @default(cuid())
+  fullName         String
+  email            String               @unique
+  passwordHash     String?
+  googleId         String?              @unique
+  passwordChangedAt DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  resetTokens      PasswordResetToken[]
+  workspaces       Workspace[]
+  generations      WorkspaceGeneration[]
+
+  @@map("users")
+}
+
+// ------------------------------------------------------------
+// PasswordResetToken
+//
+// Stores password reset tokens for users.
+// Tokens are hashed before storage for security.
+// ------------------------------------------------------------
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+// ------------------------------------------------------------
+// Workspace
+//
+// Tenant-isolated business workspace created by a user.
+// ------------------------------------------------------------
+model Workspace {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  slug        String
+  description String?  @db.Text
+  status      String   @default("ACTIVE") // ACTIVE, PROVISIONING, FAILED
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  modules     WorkspaceModule[]
+  generations WorkspaceGeneration[]
+  invoices    Invoice[]
+  payments    Payment[]
+  receipts    Receipt[]
+  financialAuditLogs FinancialAuditLog[]
+
+  @@index([userId])
+  @@map("workspaces")
+}
+
+// ------------------------------------------------------------
+// WorkspaceModule
+//
+// Dynamic business entities/models belonging to a workspace.
+// Maps to a provisioned physical PostgreSQL table.
+// ------------------------------------------------------------
+model WorkspaceModule {
+  id          String   @id @default(cuid())
+  workspaceId String
+  name        String
+  slug        String
+  tableName   String
+  description String?  @db.Text
+  fields      Json     // Array of field definitions
+  views       Json?    // Array of view types e.g. ["table", "form"]
+  relationships Json?  // Relationships metadata
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId])
+  @@map("workspace_modules")
+}
+
+// ------------------------------------------------------------
+// WorkspaceGeneration
+//
+// Persists AI blueprint drafts and provisioning progress.
+// Enforces tenant ownership on review and launch.
+// ------------------------------------------------------------
+model WorkspaceGeneration {
+  id           String    @id @default(cuid())
+  userId       String
+  description  String    @db.Text
+  status       String    @default("REVIEW_READY") // REVIEW_READY, PROVISIONING, COMPLETED, FAILED
+  blueprint    Json
+  errorMessage String?   @db.Text
+  workspaceId  String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace    Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("workspace_generations")
+}
+
+// ------------------------------------------------------------
+// Invoice
+//
+// Platform-managed reusable financial invoice connected to
+// real workspace records (orders, bookings, services, etc.).
+// ------------------------------------------------------------
+model Invoice {
+  id               String              @id @default(cuid())
+  workspaceId      String
+  invoiceNumber    String
+  sourceModuleSlug String?
+  sourceRecordId   String?
+  payerModuleSlug  String?
+  payerRecordId    String?
+  payerName        String?
+  payerEmail       String?
+  issueDate        DateTime            @default(now())
+  dueDate          DateTime?
+  currency         String              @default("USD")
+  subtotal         Decimal             @db.Decimal(14, 2)
+  discount         Decimal             @default(0) @db.Decimal(14, 2)
+  tax              Decimal             @default(0) @db.Decimal(14, 2)
+  totalAmount      Decimal             @db.Decimal(14, 2)
+  amountPaid       Decimal             @default(0) @db.Decimal(14, 2)
+  balanceDue       Decimal             @db.Decimal(14, 2)
+  status           String              @default("Draft") // Draft, Issued, Partially Paid, Paid, Overdue, Cancelled
+  notes            String?             @db.Text
+  lineItems        Json                @default("[]")
+  metadata         Json?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  workspace        Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  payments         Payment[]
+  receipts         Receipt[]
+  auditLogs        FinancialAuditLog[]
+
+  @@unique([workspaceId, invoiceNumber])
+  @@index([workspaceId])
+  @@index([workspaceId, status])
+  @@index([workspaceId, sourceRecordId])
+  @@map("invoices")
+}
+
+// ------------------------------------------------------------
+// Payment
+//
+// Represents money received against an invoice.
+// ------------------------------------------------------------
+model Payment {
+  id             String              @id @default(cuid())
+  workspaceId    String
+  invoiceId      String
+  amount         Decimal             @db.Decimal(14, 2)
+  currency       String              @default("USD")
+  paymentMethod  String              // Cash, Bank Transfer, Card, POS, Cheque, Online
+  status         String              @default("CONFIRMED") // CONFIRMED, PENDING, FAILED, CANCELLED
+  transactionRef String?
+  idempotencyKey String?
+  paymentDate    DateTime            @default(now())
+  notes          String?             @db.Text
+  metadata       Json?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  workspace      Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invoice        Invoice             @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  receipt        Receipt?
+  auditLogs      FinancialAuditLog[]
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId])
+  @@index([invoiceId])
+  @@index([workspaceId, status])
+  @@map("payments")
+}
+
+// ------------------------------------------------------------
+// Receipt
+//
+// Immutable document generated for confirmed payments.
+// ------------------------------------------------------------
+model Receipt {
+  id                 String              @id @default(cuid())
+  workspaceId        String
+  receiptNumber      String
+  invoiceId          String
+  paymentId          String              @unique
+  amountReceived     Decimal             @db.Decimal(14, 2)
+  currency           String              @default("USD")
+  paymentDate        DateTime            @default(now())
+  paymentMethod      String
+  transactionRef     String?
+  previousPaidAmount Decimal             @default(0) @db.Decimal(14, 2)
+  remainingBalance   Decimal             @db.Decimal(14, 2)
+  snapshot           Json
+  issuedAt           DateTime            @default(now())
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invoice            Invoice             @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  payment            Payment             @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  auditLogs          FinancialAuditLog[]
+
+  @@unique([workspaceId, receiptNumber])
+  @@index([workspaceId])
+  @@index([invoiceId])
+  @@map("receipts")
+}
+
+// ------------------------------------------------------------
+// FinancialAuditLog
+//
+// Audit trail for financial state changes.
+// ------------------------------------------------------------
+model FinancialAuditLog {
+  id          String    @id @default(cuid())
+  workspaceId String
+  invoiceId   String?
+  paymentId   String?
+  receiptId   String?
+  entityType  String    // INVOICE, PAYMENT, RECEIPT
+  entityId    String
+  action      String    // CREATED, ISSUED, PAYMENT_CONFIRMED, STATUS_CHANGED, CANCELLED
+  details     Json?
+  userId      String
+  createdAt   DateTime  @default(now())
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invoice     Invoice?  @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  payment     Payment?  @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  receipt     Receipt?  @relation(fields: [receiptId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([entityId])
+  @@map("financial_audit_logs")
+}
+

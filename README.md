@@ -90,6 +90,53 @@ node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 | `POST` | `/api/auth/reset-password` | Public | Reset password with token |
 | `GET` | `/api/auth/google` | Public | Initiate Google OAuth login |
 | `GET` | `/api/auth/google/callback` | Public | Google OAuth callback (browser redirect) |
+| `POST` | `/api/workspaces/generate` | 🔒 Required | Generate AI workspace blueprint |
+| `GET` | `/api/workspaces/generations/:id` | 🔒 Required | Get generation draft for review |
+| `POST` | `/api/workspaces/generations/:id/regenerate` | 🔒 Required | Regenerate blueprint from draft |
+| `POST` | `/api/workspaces/generations/:id/launch` | 🔒 Required | Confirm blueprint & provision dynamic PostgreSQL tables |
+| `POST` | `/api/workspaces/provision` | 🔒 Required | Direct workspace provisioning |
+| `GET` | `/api/workspaces` | 🔒 Required | List authenticated user's workspaces |
+| `GET` | `/api/workspaces/:workspaceId` | 🔒 Required | Get workspace details and module schemas |
+| `GET` | `/api/workspaces/:workspaceId/overview` | 🔒 Required | Get schema-aware workspace aggregate counts & recent records |
+| `GET` | `/api/workspaces/:workspaceId/modules/:moduleId/records` | 🔒 Required | List records in module with search & pagination |
+| `POST` | `/api/workspaces/:workspaceId/modules/:moduleId/records` | 🔒 Required | Create record in module table |
+| `GET` | `/api/workspaces/:workspaceId/modules/:moduleId/records/:recordId` | 🔒 Required | Get single record |
+| `PATCH` | `/api/workspaces/:workspaceId/modules/:moduleId/records/:recordId` | 🔒 Required | Update record in module table |
+| `DELETE` | `/api/workspaces/:workspaceId/modules/:moduleId/records/:recordId` | 🔒 Required | Delete record in module table |
+
+---
+
+## Workspace Onboarding & Dynamic Provisioning
+
+### Architecture & Security Flow
+
+```
+User (Describe Step) 
+  ↓ POST /api/workspaces/generate (50-5000 chars, Auth required)
+VifeAI Engine (Structured JSON Blueprint + Server-side schema validation)
+  ↓ Draft persisted in PostgreSQL (workspace_generations)
+User (Review Step)
+  ↓ Inspect, rename, edit models, regenerate if needed
+User (Launch Step)
+  ↓ POST /api/workspaces/generations/:id/launch
+Dynamic Provisioning Engine:
+  1. Validates user ownership of draft
+  2. Server re-validates blueprint schema & sanitizes identifiers (allowlist regex)
+  3. Creates Workspace record in PostgreSQL
+  4. Dynamic DDL execution: CREATE TABLE "ws_<wsId>_<slug>" with typed columns + JSONB
+  5. Multi-tenant foreign key cascade & indexed tenant isolation
+  6. Idempotency protection against duplicate launches
+  ↓
+Ready Step → Dynamic Dashboard (Record CRUD with validated field constraints)
+```
+
+### Supported Field Types
+- `Text` / `Email` / `Phone` (PostgreSQL `TEXT`)
+- `Number` / `Currency` (PostgreSQL `NUMERIC(14, 2)`)
+- `Boolean` (PostgreSQL `BOOLEAN DEFAULT FALSE`)
+- `Date` (PostgreSQL `TIMESTAMPTZ`)
+- `Select` (Categorical options with validation)
+- `Relation` (Referential link across modules via `VARCHAR(64)`)
 
 ---
 
@@ -326,3 +373,16 @@ npx prisma generate
 npm run dev      # Start with nodemon (auto-restart on changes)
 npm start        # Start without nodemon
 ```
+
+---
+
+## Testing
+
+```bash
+# Run unit & API tests
+node --test tests/blueprintAiValidation.test.js tests/vifeAiService.test.js tests/workspaceApi.test.js
+
+# Run full End-to-End integration suite (all 6 required scenarios)
+node --test tests/e2eIntegration.test.js
+```
+
