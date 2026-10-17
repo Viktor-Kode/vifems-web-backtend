@@ -74,6 +74,11 @@ Errors follow:
         description:
           "AI blueprint generation, workspace provisioning, and dynamic data records",
       },
+      {
+        name: "Financial documents",
+        description:
+          "Workspace-scoped invoices, manually recorded payments, receipts, and PDF downloads. Payment records are not provider-verified.",
+      },
     ],
     components: {
       securitySchemes: {

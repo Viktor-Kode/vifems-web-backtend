@@ -184,7 +184,7 @@ export async function resetPassword(rawToken, newPassword) {
 
   const resetToken = await prisma.passwordResetToken.findUnique({
     where: { tokenHash },
-    include: { user: true }
+    include: { user: { select: { id: true } } },
   });
 
   if (!resetToken) {
@@ -208,19 +208,30 @@ export async function resetPassword(rawToken, newPassword) {
   
   const now = new Date();
 
-  // Update user password and passwordChangedAt to invalidate existing sessions
-  await prisma.user.update({
-    where: { id: resetToken.userId },
-    data: {
-      passwordHash,
-      passwordChangedAt: now,
-    }
-  });
+  // Consume the one-time token and change the password together. The
+  // conditional update prevents two concurrent requests from reusing it.
+  await prisma.$transaction(async (tx) => {
+    const consumedToken = await tx.passwordResetToken.updateMany({
+      where: {
+        id: resetToken.id,
+        userId: resetToken.userId,
+        usedAt: null,
+        expiresAt: { gt: now },
+      },
+      data: { usedAt: now },
+    });
 
-  // Mark token as used
-  await prisma.passwordResetToken.update({
-    where: { id: resetToken.id },
-    data: { usedAt: now }
+    if (consumedToken.count !== 1) {
+      throw new Error("Invalid or expired password reset token.");
+    }
+
+    await tx.user.update({
+      where: { id: resetToken.userId },
+      data: {
+        passwordHash,
+        passwordChangedAt: now,
+      },
+    });
   });
 }
 

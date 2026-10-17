@@ -36,9 +36,10 @@ export function errorHandler(err, req, res, next) {
     });
   }
 
-  const status = err.status || err.statusCode || 500;
+  const requestedStatus = Number(err.status || err.statusCode || 500);
+  const status = requestedStatus >= 400 && requestedStatus <= 599 ? requestedStatus : 500;
   const message =
-    process.env.NODE_ENV === "production" && status === 500
+    status >= 500 && process.env.NODE_ENV !== "development"
       ? "An unexpected error occurred."
       : err.message || "An unexpected error occurred.";
 

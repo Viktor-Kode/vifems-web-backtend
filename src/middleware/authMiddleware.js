@@ -62,11 +62,20 @@ export async function requireAuth(req, res, next) {
     // can access it without repeating auth checks.
     req.user = user;
     next();
-  } catch {
-    // Covers expired tokens, malformed tokens, and any unexpected errors.
-    return res.status(401).json({
-      success: false,
-      message: "Authentication required.",
-    });
+  } catch (error) {
+    // Invalid credentials are an authentication failure. Database and other
+    // infrastructure errors must reach the central handler as server errors.
+    if (
+      ["JsonWebTokenError", "TokenExpiredError", "NotBeforeError"].includes(
+        error?.name
+      )
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+    }
+
+    return next(error);
   }
 }
